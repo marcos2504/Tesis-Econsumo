@@ -1,0 +1,6 @@
+pandas
+scikit-learn
+PyPDF2
+imapclient
+email-validator
+pdfplumber
