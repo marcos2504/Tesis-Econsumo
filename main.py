@@ -89,7 +89,7 @@ def extraer_datos_playwright(url, index):
 
             nombre_archivo = f"factura_{index + 1}.pdf"
 
-            page.set_viewport_size({"width": 1280, "height": 3000})
+            page.set_viewport_size({"width": 1280, "height": 2000})
             page.pdf(
                 path=nombre_archivo,
                 print_background=True,
