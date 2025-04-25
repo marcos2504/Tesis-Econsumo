@@ -4,3 +4,4 @@ PyPDF2
 google-auth
 google-auth-oauthlib
 google-api-python-client
+PyMuPDF
