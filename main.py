@@ -1,20 +1,27 @@
 import os
+import io
 import re
 import csv
 import base64
-import pandas as pd
 import fitz  # PyMuPDF
+from matplotlib import pyplot as plt
 import requests
-
+import pytesseract
+import cv2
+import numpy as np
+import pandas as pd
+from PIL import Image
+from playwright.sync_api import sync_playwright
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from playwright.sync_api import sync_playwright
+from pdf2image import convert_from_path
 
 # === CONFIGURACIÓN ===
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 EMAIL_QUERY = 'subject:"Factura Digital"'
 CSV_FILE = "facturas_edemsa.csv"
+HISTORICO_CSV = "historico_consumo_extraido.csv"
 
 # === GMAIL API ===
 def get_service():
@@ -74,13 +81,11 @@ def extraer_info_pdf(nombre_pdf):
     fecha_lectura = ""
     consumo_kwh = ""
 
-    # Buscar NIC
     for linea in lineas:
         if re.fullmatch(r"\d{6,10}", linea.strip()):
             nic = linea.strip()
             break
 
-    # Buscar Dirección
     for i, linea in enumerate(lineas):
         if "Domicilio suministro" in linea:
             calle = lineas[i + 1].strip()
@@ -89,30 +94,24 @@ def extraer_info_pdf(nombre_pdf):
             direccion = f"{calle}, {localidad1}, {localidad2}"
             break
 
-    # Buscar todas las fechas y tomar la segunda
     fechas = re.findall(r'\d{2}/\d{2}/\d{4}', texto)
     if len(fechas) >= 2:
         fecha_lectura = fechas[1]
 
-    # Buscar consumo - nueva implementación
-    # Buscamos la sección "Energía Activa" y tomamos el último valor numérico después de ella
     energia_activa_index = None
     for i, linea in enumerate(lineas):
         if "Energía Activa" in linea:
             energia_activa_index = i
             break
-    
+
     if energia_activa_index is not None:
-        # Buscamos los siguientes números después de "Energía Activa"
         for linea in lineas[energia_activa_index+1:energia_activa_index+5]:
             if re.match(r'^\d+,\d{2}$', linea.strip()):
                 consumo_kwh = linea.strip().replace(",", ".")
-    
-    # Alternativa: Buscar en la sección de Cargo Variable
+
     if not consumo_kwh:
         for i, linea in enumerate(lineas):
             if "Cargo Variable" in linea and "kWh" in linea:
-                # La siguiente línea debería contener el consumo
                 if i+1 < len(lineas):
                     match = re.search(r'(\d+,\d+)', lineas[i+1])
                     if match:
@@ -125,14 +124,39 @@ def extraer_info_pdf(nombre_pdf):
         "consumo_kwh": consumo_kwh
     }
 
+def extraer_grafico_por_coords(nombre_pdf, output_path, dpi=200):
+    try:
+        pages = convert_from_path(nombre_pdf, dpi=dpi)
+        if not pages:
+            print("❌ No se pudo renderizar el PDF.")
+            return False
+
+        page = pages[0]
+        width, height = page.size
+
+        top = int(height * 0.455)
+        bottom = int(height * 0.585)
+        left = int(width * 0.05)
+        right = int(width * 0.495)
+
+        grafico = page.crop((left, top, right, bottom))
+        grafico.save(output_path)
+        print(f"📊 Gráfico recortado guardado en {output_path}")
+        return True
+    except Exception as e:
+        print(f"[!] Error al extraer gráfico: {e}")
+        return False
+
 def guardar_factura(data):
     file_exists = os.path.exists(CSV_FILE)
     with open(CSV_FILE, 'a', newline='') as csvfile:
-        fieldnames = ['nic', 'direccion', 'fecha_lectura', 'consumo_kwh', 'link']
+        fieldnames = ['nic', 'direccion', 'fecha_lectura', 'consumo_kwh', 'link', 'imagen']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
         writer.writerow(data)
+
+
 
 # === DESCARGA DIRECTA DEL PDF AUTÉNTICO ===
 def descargar_factura_pdf(url, index):
@@ -164,6 +188,14 @@ def descargar_factura_pdf(url, index):
 
                 datos = extraer_info_pdf(nombre_archivo)
                 datos["link"] = url
+
+                nombre_imagen = f"grafico_{index + 1}.png"
+                if extraer_grafico_por_coords(nombre_archivo, nombre_imagen):
+                    datos["imagen"] = nombre_imagen
+                else:
+                    datos["imagen"] = ""
+
+                guardar_factura(datos)
                 return datos
             else:
                 print(f"⚠️ Error al descargar PDF real. Status: {response.status_code}")
@@ -189,9 +221,7 @@ def main():
     print(f"🆕 Se encontraron {len(nuevos)} nuevas facturas.")
 
     for i, link in enumerate(nuevos):
-        data = descargar_factura_pdf(link, i)
-        if data:
-            guardar_factura(data)
+        descargar_factura_pdf(link, i)
 
     print("\n✅ Proceso finalizado.\n")
 
